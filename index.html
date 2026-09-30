@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Facial & Beauty Booking System</title>
+    <!-- Firebase SDK (v9/v10 Compat) -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: #f4f5f7; display: flex; justify-content: center; padding: 20px 0; }
+        .app-container { width: 100%; max-width: 450px; background: #fff; border-radius: 20px; box-shadow: 0 8px 24px rgba(0,0,0,0.1); overflow: hidden; min-height: 800px; display: flex; flex-direction: column; }
+        
+        /* 身份切換頂欄 */
+        .role-bar { background: #1a1a1a; color: white; padding: 10px; text-align: center; font-size: 13px; display: flex; justify-content: space-around; align-items: center; }
+        .role-btn { background: #333; color: #fff; border: none; padding: 6px 14px; border-radius: 12px; cursor: pointer; font-size: 12px; }
+        .role-btn.active { background: #c83d47; font-weight: bold; }
+        
+        .header { padding: 16px; text-align: center; border-bottom: 1px solid #eee; background: #fafafa; }
+        .header h1 { font-size: 18px; color: #333; }
+        
+        .content { flex: 1; padding: 16px; overflow-y: auto; }
+        
+        /* 技師表單 */
+        .form-group { margin-bottom: 12px; }
+        .form-group label { display: block; font-size: 12px; font-weight: bold; margin-bottom: 4px; color: #555; }
+        .form-group input, .form-group select { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
+        .btn-submit { width: 100%; background: #27ae60; color: white; border: none; padding: 10px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 8px; }
+        
+        /* 卡片樣式 */
+        .slot-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 14px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+        .slot-card.booked-out { background: #f9f9f9; border-color: #eee; }
+        .slot-info h3 { font-size: 15px; color: #222; margin-bottom: 4px; }
+        .slot-info p { font-size: 12px; color: #666; margin-bottom: 2px; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: bold; }
+        .badge-open { background: #e8f8f0; color: #27ae60; }
+        .badge-full { background: #fde8e8; color: #c83d47; }
+        
+        .btn-book { background: #c83d47; color: white; border: none; padding: 6px 14px; border-radius: 16px; font-size: 12px; cursor: pointer; }
+        .btn-book:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-danger { background: #e74c3c; color: white; border: none; padding: 4px 8px; border-radius: 6px; font-size: 11px; cursor: pointer; }
+        
+        /* 預約細節 (技師專用) */
+        .client-list { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #ddd; font-size: 12px; color: #444; }
+        .client-item { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
+
+        /* Modal 彈窗 */
+        .modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 1000; }
+        .modal-body { background: white; width: 90%; max-width: 380px; padding: 20px; border-radius: 16px; }
+    </style>
+</head>
+<body>
+
+<div class="app-container">
+    <!-- 切換權限角色 -->
+    <div class="role-bar">
+        <span>檢視身分：</span>
+        <button class="role-btn active" id="btn-client" onclick="setRole('client')">客人預約頁</button>
+        <button class="role-btn" id="btn-tech" onclick="setRole('tech')">技師管理頁</button>
+    </div>
+
+    <div class="header">
+        <h1 id="view-title">Facial 網上預約</h1>
+    </div>
+
+    <!-- 客人檢視畫面 -->
+    <div class="content" id="client-view">
+        <div id="slots-container-client">載入中...</div>
+    </div>
+
+    <!-- 技師管理畫面 -->
+    <div class="content" id="tech-view" style="display: none;">
+        <div style="background: #f9f9f9; padding: 12px; border-radius: 10px; margin-bottom: 16px;">
+            <h3 style="font-size: 14px; margin-bottom: 8px;">➕ 發布新 Facial 時段</h3>
+            <form id="add-slot-form" onsubmit="handleCreateSlot(event)">
+                <div class="form-group">
+                    <label>療程項目</label>
+                    <input type="text" id="tech-service" placeholder="例如：深層清潔 Facial" required>
+                </div>
+                <div class="form-group">
+                    <label>技師名稱</label>
+                    <input type="text" id="tech-name" placeholder="例如：Jenny" required>
+                </div>
+                <div class="form-group">
+                    <label>日期與時間</label>
+                    <input type="datetime-local" id="tech-time" required>
+                </div>
+                <button type="submit" class="btn-submit">發布時段</button>
+            </form>
+        </div>
+
+        <h3>📋 所有預約狀態 (技師視角)</h3>
+        <div id="slots-container-tech" style="margin-top: 10px;">載入中...</div>
+    </div>
+</div>
+
+<!-- 客人填寫預約 Modal -->
+<div class="modal" id="book-modal">
+    <div class="modal-body">
+        <h3 style="margin-bottom: 12px;">確認預約 Facial 時段</h3>
+        <form onsubmit="handleConfirmBooking(event)">
+            <div class="form-group">
+                <label>您的姓名</label>
+                <input type="text" id="book-client-name" placeholder="請輸入姓名" required>
+            </div>
+            <div class="form-group">
+                <label>聯絡電話</label>
+                <input type="tel" id="book-client-phone" placeholder="請輸入電話" required>
+            </div>
+            <button type="submit" class="btn-submit">確認預約</button>
+            <button type="button" onclick="closeModal()" style="width:100%; border:none; background:transparent; margin-top:8px; color:#888; cursor:pointer;">取消</button>
+        </form>
+    </div>
+</div>
+
+<script>
+    // 1. Firebase 初始化 (請替換成你自己的 Firebase 專案設定值)
+    const firebaseConfig = {
+        apiKey: "YOUR_API_KEY",
+        authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+        projectId: "YOUR_PROJECT_ID",
+        storageBucket: "YOUR_PROJECT_ID.appspot.com",
+        messagingSenderId: "YOUR_SENDER_ID",
+        appId: "YOUR_APP_ID"
+    };
+    
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    let currentRole = 'client';
+    let targetSlotId = null;
+
+    // 2. 切換角色視圖
+    function setRole(role) {
+        currentRole = role;
+        document.getElementById('btn-client').classList.toggle('active', role === 'client');
+        document.getElementById('btn-tech').classList.toggle('active', role === 'tech');
+        
+        document.getElementById('client-view').style.display = role === 'client' ? 'block' : 'none';
+        document.getElementById('tech-view').style.display = role === 'tech' ? 'block' : 'none';
+        document.getElementById('view-title').innerText = role === 'client' ? 'Facial 網上預約' : '技師預約管理面板';
+    }
+
+    // 3. 實時監聽資料庫變更 (Realtime Sync)
+    db.collection("facial_slots").orderBy("time", "asc").onSnapshot((snapshot) => {
+        const slots = [];
+        snapshot.forEach(doc => {
+            slots.push({ id: doc.id, ...doc.data() });
+        });
+        renderClientUI(slots);
+        renderTechUI(slots);
+    });
+
+    // 4. 渲染客人介面 (隱私保護：完全不顯示客人姓名電話)
+    function renderClientUI(slots) {
+        const container = document.getElementById('slots-container-client');
+        container.innerHTML = '';
+
+        if(slots.length === 0) {
+            container.innerHTML = '<p style="text-align:center; color:#999;">目前沒有可預約的時段</p>';
+            return;
+        }
+
+        slots.forEach(slot => {
+            const isBooked = slot.isBooked || false;
+            const card = document.createElement('div');
+            card.className = `slot-card ${isBooked ? 'booked-out' : ''}`;
+            
+            card.innerHTML = `
+                <div class="slot-info">
+                    <h3>${slot.service}</h3>
+                    <p>技師: ${slot.techName}</p>
+                    <p>時間: ${new Date(slot.time).toLocaleString([], {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})}</p>
+                    <span class="badge ${isBooked ? 'badge-full' : 'badge-open'}">
+                        ${isBooked ? '已被預約 (Full)' : '可預約'}
+                    </span>
+                </div>
+                <div>
+                    <button class="btn-book" ${isBooked ? 'disabled' : ''} onclick="openBookModal('${slot.id}')">
+                        ${isBooked ? '已滿' : '預約'}
+                    </button>
+                </div>
+            `;
+            container.appendChild(card);
+        });
+    }
+
+    // 5. 渲染技師介面 (可檢視所有客人資料、取消/修改預約)
+    function renderTechUI(slots) {
+        const container = document.getElementById('slots-container-tech');
+        container.innerHTML = '';
+
+        slots.forEach(slot => {
+            const isBooked = slot.isBooked || false;
+            const card = document.createElement('div');
+            card.className = 'slot-card';
+            card.style.flexDirection = 'column';
+            card.style.alignItems = 'stretch';
+
+            let clientDetailHtml = isBooked ? `
+                <div class="client-list">
+                    <div class="client-item">
+                        <span>👤 客人: <b>${slot.clientName}</b> (${slot.clientPhone})</span>
+                        <button class="btn-danger" onclick="cancelBooking('${slot.id}')">取消預約</button>
+                    </div>
+                </div>
+            ` : '<div style="font-size:12px; color:#888; margin-top:6px;">尚無客人預約</div>';
+
+            card.innerHTML = `
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div class="slot-info">
+                        <h3>${slot.service} <small>(${slot.techName})</small></h3>
+                        <p>🕒 ${new Date(slot.time).toLocaleString()}</p>
+                    </div>
+                    <button class="btn-danger" style="background:#888;" onclick="deleteSlot('${slot.id}')">刪除時段</button>
+                </div>
+                ${clientDetailHtml}
+            `;
+            container.appendChild(card);
+        });
+    }
+
+    // 技師發布時段
+    function handleCreateSlot(e) {
+        e.preventDefault();
+        const service = document.getElementById('tech-service').value;
+        const techName = document.getElementById('tech-name').value;
+        const time = document.getElementById('tech-time').value;
+
+        db.collection("facial_slots").add({
+            service, techName, time,
+            isBooked: false,
+            clientName: "",
+            clientPhone: ""
+        }).then(() => {
+            document.getElementById('add-slot-form').reset();
+        });
+    }
+
+    // 客人打開預約彈窗
+    function openBookModal(slotId) {
+        targetSlotId = slotId;
+        document.getElementById('book-modal').style.display = 'flex';
+    }
+
+    function closeModal() {
+        document.getElementById('book-modal').style.display = 'none';
+    }
+
+    // 客人提交預約
+    function handleConfirmBooking(e) {
+        e.preventDefault();
+        const clientName = document.getElementById('book-client-name').value;
+        const clientPhone = document.getElementById('book-client-phone').value;
+
+        db.collection("facial_slots").doc(targetSlotId).update({
+            isBooked: true,
+            clientName,
+            clientPhone
+        }).then(() => {
+            closeModal();
+            alert('預約成功！');
+        });
+    }
+
+    // 技師取消客人的預約
+    function cancelBooking(slotId) {
+        if(confirm('確定要取消此預約嗎？')) {
+            db.collection("facial_slots").doc(slotId).update({
+                isBooked: false,
+                clientName: "",
+                clientPhone: ""
+            });
+        }
+    }
+
+    // 技師刪除整條時段
+    function deleteSlot(slotId) {
+        if(confirm('確定要刪除整個時段嗎？')) {
+            db.collection("facial_slots").doc(slotId).delete();
+        }
+    }
+</script>
+</body>
+</html>
